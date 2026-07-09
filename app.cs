@@ -539,10 +539,60 @@ namespace DataMatrixGenerator
             this.BackColor = Color.FromArgb(0x0A, 0x0B, 0x0D);
             this.ForeColor = Color.FromArgb(0xD0, 0xD2, 0xD6);
             this.logs = new List<LogEntry>();
-            this.DrawMode = DrawMode.OwnerDrawFixed;
+            this.DrawMode = DrawMode.OwnerDrawVariable;
             this.ItemHeight = 24;
             this.BorderStyle = BorderStyle.None;
             this.IntegralHeight = false;
+            this.SelectionMode = SelectionMode.MultiExtended;
+            this.KeyDown += LogConsole_KeyDown;
+            this.MeasureItem += LogConsole_MeasureItem;
+        }
+
+        private void LogConsole_MeasureItem(object sender, MeasureItemEventArgs e)
+        {
+            if (e.Index < 0 || e.Index >= Items.Count) { e.ItemHeight = 24; return; }
+            LogEntry entry = Items[e.Index] as LogEntry;
+            if (entry == null) { e.ItemHeight = 24; return; }
+
+            using (Font font = new Font("Segoe UI Semibold", 10.5F))
+            using (Graphics g = CreateGraphics())
+            {
+                string ts = string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] ", entry.Timestamp);
+                string lvl = string.Format("[{0}] ", entry.Level);
+                float tsW = g.MeasureString(ts, font).Width;
+                float lvlW = g.MeasureString(lvl, font).Width;
+                float maxW = Width - 16 - tsW - lvlW;
+                if (maxW < 50) maxW = 50;
+                SizeF sz = g.MeasureString(entry.Message, font, (int)maxW);
+                e.ItemHeight = Math.Max(24, (int)sz.Height + 4);
+            }
+        }
+
+        private void LogConsole_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Control && e.KeyCode == Keys.C)
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (int i in SelectedIndices)
+                {
+                    if (i >= 0 && i < Items.Count)
+                    {
+                        LogEntry entry = Items[i] as LogEntry;
+                        if (entry != null)
+                            sb.AppendFormat("[{0:yyyy-MM-dd HH:mm:ss.fff}] [{1}] {2}\r\n", entry.Timestamp, entry.Level, entry.Message);
+                    }
+                }
+                if (sb.Length > 0)
+                    Clipboard.SetText(sb.ToString().TrimEnd());
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.A)
+            {
+                for (int i = 0; i < Items.Count; i++) SetSelected(i, true);
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+            }
         }
 
         public void ScrollToBottom()
@@ -590,7 +640,12 @@ namespace DataMatrixGenerator
                 using (Brush b = new SolidBrush(lvlColor))
                     g.DrawString(lvl, font, b, 8 + tsW, y);
                 using (Brush b = new SolidBrush(Color.FromArgb(0xD0, 0xD2, 0xD6)))
-                    g.DrawString(entry.Message, font, b, 8 + tsW + lvlW, y);
+                {
+                    float maxW = Width - 16 - tsW - lvlW;
+                    if (maxW < 50) maxW = 50;
+                    RectangleF rc = new RectangleF(8 + tsW + lvlW, y, maxW, e.Bounds.Height - 2);
+                    g.DrawString(entry.Message, font, b, rc);
+                }
             }
 
             e.DrawFocusRectangle();
@@ -617,6 +672,8 @@ namespace DataMatrixGenerator
         private CustomTextBox txtDataInput;
         private ToggleSwitch toggleAuto;
         private Label lblAuto;
+        private ToggleSwitch toggleApi;
+        private Label lblApi;
         private CustomButton btnGenerate;
         private PreviewPanel pbPreview;
         private CustomButton btnPrint;
@@ -636,6 +693,8 @@ namespace DataMatrixGenerator
         private int resizeDir;
         private Point resizeStart;
         private Rectangle formStart;
+        private string productName = "";
+        private Label lblProductInfo;
 
         public MainForm()
         {
@@ -941,6 +1000,14 @@ namespace DataMatrixGenerator
                 AutoSize = true
             };
 
+            toggleApi = new ToggleSwitch();
+            lblApi = new Label {
+                Text = "API",
+                ForeColor = Color.FromArgb(0x9E, 0x9E, 0x9E),
+                Font = new Font("Segoe UI", 10.5F),
+                AutoSize = true
+            };
+
             btnGenerate = new CustomButton {
                 Text = "Generate",
                 IconType = ButtonIconType.Wand,
@@ -950,6 +1017,15 @@ namespace DataMatrixGenerator
                 Font = new Font("Segoe UI Semibold", 10.5F)
             };
             btnGenerate.Click += (s, e) => ExecuteGeneration();
+
+            lblProductInfo = new Label {
+                Text = "",
+                ForeColor = Color.FromArgb(0x9E, 0x9E, 0x9E),
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                AutoSize = true,
+                Visible = false
+            };
+            panelGenerate.Controls.Add(lblProductInfo);
 
             pbPreview = new PreviewPanel();
 
@@ -965,6 +1041,8 @@ namespace DataMatrixGenerator
             panelGenerate.Controls.Add(txtDataInput);
             panelGenerate.Controls.Add(toggleAuto);
             panelGenerate.Controls.Add(lblAuto);
+            panelGenerate.Controls.Add(toggleApi);
+            panelGenerate.Controls.Add(lblApi);
             panelGenerate.Controls.Add(btnGenerate);
             panelGenerate.Controls.Add(pbPreview);
             panelGenerate.Controls.Add(btnPrint);
@@ -1043,11 +1121,21 @@ namespace DataMatrixGenerator
             int rowY = 78;
             toggleAuto.Location = new Point(mx, rowY);
             lblAuto.Location = new Point(mx + 52, rowY + 1);
+            toggleApi.Location = new Point(mx + 110, rowY);
+            lblApi.Location = new Point(mx + 162, rowY + 1);
             btnGenerate.Location = new Point(cw - 180 + mx, rowY - 5);
             btnGenerate.Size = new Size(180, 40);
 
+            // Product info label
+            int infoY = rowY + 44;
+            if (lblProductInfo.Visible)
+            {
+                lblProductInfo.Location = new Point(mx, infoY);
+                infoY += lblProductInfo.Height + 4;
+            }
+
             // Preview
-            int previewY = rowY + 44;
+            int previewY = infoY;
             int footerH = 52;
             int previewH = contentH - previewY - footerH - 8;
             if (previewH < 100) previewH = 100;
@@ -1232,6 +1320,69 @@ namespace DataMatrixGenerator
             return input;
         }
 
+        private void FetchProductInfo(string data)
+        {
+            try
+            {
+                // Escape control characters for valid JSON  
+                string safeData = data.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                    .Replace("\u001D", "\\u001d");
+                string jsonBody = "{\"code\":\"" + safeData + "\"}";
+                Log("INFO", "API request: " + jsonBody);
+
+                // Write JSON to temp file and call curl (most reliable)
+                string tmpFile = System.IO.Path.GetTempFileName();
+                System.IO.File.WriteAllText(tmpFile, jsonBody, System.Text.Encoding.UTF8);
+                var psi = new System.Diagnostics.ProcessStartInfo("curl.exe",
+                    "-s -X POST https://mobile.api.crpt.ru/mobile/check -H \"Content-Type: application/json\" -d @" + tmpFile);
+                psi.RedirectStandardOutput = true;
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                var proc = System.Diagnostics.Process.Start(psi);
+                string response = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit(10000);
+                System.IO.File.Delete(tmpFile);
+
+                if (string.IsNullOrEmpty(response)) { Log("ERROR", "API: empty response"); return; }
+                Log("INFO", "API response: " + response);
+
+                // Extract productName from JSON (handles escaped quotes)
+                string search = "\"productName\":\"";
+                int idx = response.IndexOf(search);
+                if (idx >= 0)
+                {
+                    idx += search.Length;
+                    var sb = new System.Text.StringBuilder();
+                    while (idx < response.Length)
+                    {
+                        if (response[idx] == '\\' && idx + 1 < response.Length && response[idx + 1] == '"')
+                        {
+                            sb.Append('"');
+                            idx += 2;
+                        }
+                        else if (response[idx] == '"')
+                        {
+                            break;
+                        }
+                        else
+                        {
+                            sb.Append(response[idx]);
+                            idx++;
+                        }
+                    }
+                    productName = sb.ToString();
+                    lblProductInfo.Text = productName;
+                    lblProductInfo.Visible = true;
+                    PerformCustomLayout();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR", "API error: " + ex.Message);
+            }
+        }
+
         private void ExecuteGeneration()
         {
             string inputText = txtDataInput.Text.Trim();
@@ -1293,6 +1444,9 @@ namespace DataMatrixGenerator
 
                     Log("INFO", string.Format("Code: \"{0}\" | File: data\\{1}", inputText, last10 + ".png"));
 
+                    // Fetch product info from CRPT API (if enabled)
+                    if (toggleApi.Checked) FetchProductInfo(encodeData);
+
                     if (toggleAuto.Checked)
                     {
                         Log("INFO", "Auto-mode triggered printing.");
@@ -1331,23 +1485,36 @@ namespace DataMatrixGenerator
                 }
 
                 pd.PrintPage += (sender, args) => {
-                    // Center and scale image keeping aspect ratio
+                    Graphics g = args.Graphics;
                     float pageW = args.PageBounds.Width;
                     float pageH = args.PageBounds.Height;
+                    float yOff = 0;
 
+                    // Print product name if available
+                    if (!string.IsNullOrEmpty(productName))
+                    {
+                        using (Font pf = new Font("Segoe UI", 10, FontStyle.Bold))
+                        {
+                            string text = "Product: " + productName;
+                            SizeF sz = g.MeasureString(text, pf);
+                            float tx = (pageW - sz.Width) / 2f;
+                            g.DrawString(text, pf, Brushes.Black, tx, 20);
+                            yOff = sz.Height + 30;
+                        }
+                    }
+
+                    // Center and scale image keeping aspect ratio
                     float imgW = img.Width;
                     float imgH = img.Height;
-
-                    float ratio = Math.Min(pageW / imgW, pageH / imgH) * 0.8f; // Margin
-
+                    float availH = pageH - yOff - 10;
+                    float ratio = Math.Min(pageW / imgW, availH / imgH) * 0.8f;
                     float drawW = imgW * ratio;
                     float drawH = imgH * ratio;
-
                     float x = (pageW - drawW) / 2f;
-                    float y = (pageH - drawH) / 2f;
+                    float y = yOff + (availH - drawH) / 2f;
 
-                    args.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    args.Graphics.DrawImage(img, x, y, drawW, drawH);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(img, x, y, drawW, drawH);
                 };
 
                 pd.Print();
